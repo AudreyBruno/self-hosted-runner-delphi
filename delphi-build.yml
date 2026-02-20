@@ -1,0 +1,93 @@
+name: Build Delphi
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: self-hosted
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect version
+        id: version
+        shell: powershell
+        run: |
+          $version = $null
+          $content = Get-Content nomeDoProjeto.dproj -Raw
+
+          if ($content -match "FileVersion=(\d+\.\d+\.\d+\.\d+)") {
+            $version = "v$($Matches[1])"
+          }
+
+          if (-not $version -and (Test-Path "nomeDoProjeto.rc")) {
+            $rc = Get-Content nomeDoProjeto.rc -Raw
+            if ($rc -match "FILEVERSION\s+(\d+),(\d+),(\d+),(\d+)") {
+              $version = "v$($Matches[1]).$($Matches[2]).$($Matches[3]).$($Matches[4])"
+            }
+          }
+
+          if (-not $version) {
+            throw "Could not detect version in dproj or rc"
+          }
+
+          echo "version=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Create tag if not exists
+        shell: cmd
+        run: |
+          git config user.name github-actions
+          git config user.email actions@github.com
+          git fetch --tags
+          git tag %VERSION% || echo tag exists
+          git push origin %VERSION% || echo push skipped
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+
+      - name: Build Win32
+        shell: cmd
+        run: |
+          call "C:\Program Files (x86)\Embarcadero\Studio\23.0\bin\rsvars.bat"
+          msbuild nomeDoProjeto.dproj /t:Build /p:Config=Release /p:Platform=Win32
+
+      - name: Build Win64
+        shell: cmd
+        run: |
+          call "C:\Program Files (x86)\Embarcadero\Studio\23.0\bin\rsvars.bat"
+          msbuild nomeDoProjeto.dproj /t:Build /p:Config=Release /p:Platform=Win64
+
+      - name: Build Android
+        shell: cmd
+        run: |
+          call "C:\Program Files (x86)\Embarcadero\Studio\23.0\bin\rsvars.bat"
+          msbuild nomeDoProjeto.dproj /t:Clean;Build;Deploy /p:Config=Release /p:Platform=Android
+
+      - name: Build Android64
+        shell: cmd
+        run: |
+          call "C:\Program Files (x86)\Embarcadero\Studio\23.0\bin\rsvars.bat"
+          msbuild nomeDoProjeto.dproj /t:Clean;Build;Deploy /p:Config=Release /p:Platform=Android64
+
+      - name: Prepare release files
+        shell: cmd
+        run: |
+          if not exist release mkdir release
+          copy Win32\Release\nomeDoProjeto.exe release\nomeDoProjeto-Win32.exe
+          copy Win64\Release\nomeDoProjeto.exe release\nomeDoProjeto-Win64.exe
+          copy Android\Release\nomeDoProjeto\bin\nomeDoProjeto.apk release\nomeDoProjeto-Android32.apk
+          copy Android64\Release\nomeDoProjeto\bin\nomeDoProjeto.apk release\nomeDoProjeto-Android64.apk
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.version }}
+          files: release/*
